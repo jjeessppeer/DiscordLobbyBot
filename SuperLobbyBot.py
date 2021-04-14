@@ -3,6 +3,7 @@ import random
 import secrets
 import asyncio
 import json
+import math
 
 from datetime import datetime
 import time
@@ -14,8 +15,8 @@ from dotenv import load_dotenv
 from lobby import Lobby, PermanentLobby
 
 load_dotenv()
-TOKEN = os.getenv('DISCORD_TOKEN')
-LOBBY_TIMEOUT = os.getenv('LOBBY_TIMEOUT')
+TOKEN = os.getenv('DISCORD_TOKEN') # Bot token
+LOBBY_TIMEOUT = int(os.getenv('LOBBY_TIMEOUT')) # Inactivity timeout in seconds
 
 bot = commands.Bot(command_prefix='!')
 
@@ -25,49 +26,71 @@ loaded_lobby_file = False
 
 lobby_lock = asyncio.Lock()
 
-
-
-async def time_check():
+async def chron_checkup():
     await bot.wait_until_ready()
+    
+    batch_size = 5 # Lobbies checked each iteration
+    update_interval = 5 # Interval in which all lobbies should be checked
     
     offset_count = 0
     while not bot.is_closed():
-        keys = lobbies.keys()
-        # TODO: dont check all lobbies each iteration. Stagger them.
+        await lobby_lock.acquire()
+
+        offset_count += batch_size
+        if offset_count >= len(lobbies):
+            offset_count = 0
+        if len(lobbies) < batch_size: sleep_time = 5
+        else: sleep_time = math.ceil(batch_size / len(lobbies)) * update_interval
+
+        keys = list(lobbies.keys())[offset_count:offset_count+batch_size]
+        print(f"updating: {keys}")
 
         lobbies_to_remove = []
+        current_time = time.time()
 
         print("Checking for timeouts")
         for lobby_id in keys:
             lobby = lobbies[lobby_id]
             await lobby.update_lock.acquire()
             await lobby.updateMessages()
+            await lobby.fetchMessages()
+
+            print(current_time - lobby.last_activity)
+            # Regular lobby timeout
             if (lobby.isTimedOut()):
                 lobbies_to_remove.append([lobby_id, 'Timed out.'])
-            lobby.update_lock.release()
-
-        # for lobby_hash in timed_out_lobbies:
             
-        
-        # Check for lobbies without active messages
-        print("Checking empty")
-        for lobby_id in keys:
-            lobby = lobbies[lobby_id]
-            await lobby.fetchMessages()
-            if len(lobby.messages) == 0:
-                lobbies_to_remove.append([lobby_id, 'Messages removed.'])
+            # Inactivity timeout
+            elif current_time - lobby.last_activity > LOBBY_TIMEOUT:
+                print('Removing inactive lobby')
+                lobbies_to_remove.append([lobby_id, 'Inactivity timeout.'])
 
+            # Messages removed
+            elif len(lobby.messages) == 0:
+                lobbies_to_remove.append([lobby_id, 'Messages removed.'])
+            lobby.update_lock.release()
+            
+        lobby_lock.release()
 
         # Clean up lobbies
         for [lobby_id, reason] in lobbies_to_remove:
             if lobby_id in lobbies:
                 await lobbies[lobby_id].finalizeLobby(False, reason)
-                removeLobby(lobby_id)
+                await removeLobby(lobby_id)
+        await asyncio.sleep(sleep_time - (time.time() - current_time))
 
-        await saveLobbyDump()
-
-        await asyncio.sleep(5)
-
+async def removeLobby(lobby_hash):
+    if lobby_hash not in lobbies: raise Exception("Trying to close non existant lobby")
+    await lobby_lock.acquire()
+    print(f'Deleting lobby {lobby_hash}')
+    lobby = lobbies[lobby_hash]
+    for message_id in lobbies[lobby_hash].messages:
+        try:
+            del lobby_messages[message_id]
+        except KeyError: pass
+    del lobbies[lobby_hash]
+    lobby_lock.release()
+    await saveLobbyDump()
 
 async def saveLobbyDump():
     if not loaded_lobby_file: return
@@ -102,20 +125,16 @@ async def loadLobbyDump():
     lobby_lock.release()
 
 
-
-bot.loop.create_task(time_check())
+bot.loop.create_task(chron_checkup())
 bot.loop.create_task(loadLobbyDump())
 
-def removeLobby(lobby_hash):
-    if lobby_hash not in lobbies: raise Exception("Trying to close non existant lobby")
-    lobby = lobbies[lobby_hash]
 
-    print(f'Deleting lobby {lobby_hash}')
-    for message_id in lobbies[lobby_hash].messages:
-        try:
-            del lobby_messages[message_id]
-        except KeyError: pass
-    del lobbies[lobby_hash]
+@bot.command()
+@commands.is_owner()
+async def shutdown(context):
+    await saveLobbyDump()
+    print("Shutting down.")
+    exit()
 
 @bot.event
 async def on_ready():
@@ -144,6 +163,7 @@ async def init_lobby(ctx, size: int, *args):
         lobbies[lobby.hash] = lobby
         lobby_messages[message.id] = lobby
     lobby.update_lock.release()
+    await saveLobbyDump()
 
 @bot.command(name='permlobby', help='Create a new lobby in the current channel\nUsage: "!permlobby {size} {name}"\nCreates a permanent lobby. Permanent works like normal ones with the exception that they are not removed once they fill up. Instead they are only cleared.')
 async def init_perm_lobby(ctx, size: int, *args):
@@ -168,6 +188,7 @@ async def init_perm_lobby(ctx, size: int, *args):
         lobbies[lobby.hash] = lobby
         lobby_messages[message.id] = lobby
     lobby.update_lock.release()
+    await saveLobbyDump()
 
 @bot.command(name='clonelobby', help='Clone an existing lobby to the current channel\nUsage: "!clonelobby {id:string}"\nClones the lobby with specified id to current channel. Cloned lobbies will mirror the original lobby. Changes done to either applies to both.')
 async def clone_lobby(ctx, identifier: str):
@@ -179,6 +200,7 @@ async def clone_lobby(ctx, identifier: str):
     if not message == None: 
         lobby_messages[message.id] = lobbies[identifier]
     lobbies[identifier].update_lock.release()
+    await saveLobbyDump()
 
 @bot.event
 async def on_raw_reaction_add(payload):
@@ -191,7 +213,7 @@ async def on_raw_reaction_add(payload):
     if lobby.isFull():
         await lobby.finalizeLobby()
         if type(lobby) is Lobby:
-            removeLobby(lobby.hash)
+            await removeLobby(lobby.hash)
     lobby.update_lock.release()
 
 @bot.event

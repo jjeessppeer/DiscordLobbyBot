@@ -28,6 +28,7 @@ class Lobby():
 
         self.creation_time = time.time()
         self.timeout = timeout
+        self.last_activity = self.creation_time
 
 
     def getSaveData(self):
@@ -39,7 +40,8 @@ class Lobby():
             'name': self.name,
             'messages': [[message.id, message.channel.id] for message in self.messages.values()],
             'creation_time': self.creation_time,
-            'timeout': self.timeout
+            'timeout': self.timeout,
+            'last_activity': self.last_activity
             }
         return data
     
@@ -50,6 +52,7 @@ class Lobby():
         self.name = data['name']
         self.creation_time = data['creation_time']
         self.timeout = data['timeout']
+        self.last_activity = data['last_activity']
         messages = {}
         for [message_id, channel_id] in data['messages']:
             try:
@@ -104,14 +107,17 @@ class Lobby():
         self.messages = messages_updated
     
     async def fetchMembers(self):
-        self.members = {}
+        members_updated = {}
         for message_id in self.messages:
             for reaction in self.messages[message_id].reactions:
                 try:
                     async for user in reaction.users():
                         if user.id == BOT_ID: continue
-                        self.members[user.id] = user
+                        members_updated[user.id] = user
                 except: pass
+        if members_updated != self.members:
+            self.members = members_updated
+            self.last_activity = time.time()
     
     async def updateMessages(self):
         if self.finalized: return
@@ -135,14 +141,17 @@ class Lobby():
         for message in self.messages.values():
             # Get users who reacted to each message
             users = {}
-            for reaction in message.reactions:
-                async for user in reaction.users():
-                    if user.id == BOT_ID: continue
-                    users[user.id] = user
-            # Send a message in the specified channel
-            content = self.getNotificationString(users)
-            noti_message = await message.channel.send(content)
-            notification_messages[noti_message.id] = noti_message
+            try:
+                for reaction in message.reactions:
+                    async for user in reaction.users():
+                        if user.id == BOT_ID: continue
+                        users[user.id] = user
+                # Send a message in the specified channel
+                content = self.getNotificationString(users)
+            
+                noti_message = await message.channel.send(content)
+                notification_messages[noti_message.id] = noti_message
+            except: pass
         return notification_messages
 
     async def finalizeLobby(self, notify=True, reason='Lobby filled.'):
@@ -173,22 +182,26 @@ class PermanentLobby(Lobby):
     
     def getSaveData(self):
         data = Lobby.getSaveData(self)
-        data['notification_ids'] = [[message.id, message.channl.id] for message in self.notification_messages]
+        data['notifications'] = [[message.id, message.channel.id] for message in self.notification_messages.values()]
         data['type'] = 'PermanentLobby'
         return data
     
     async def loadData(self, data):
         await Lobby.loadData(self, data)
-        # notification_messages = {}
-        # for message_id in data['notification_ids']:
-        #     try:
-        #         msg = await self.messages[message_id].channel.fetch_message(message_id)
-        #         messages_updated[message_id] = msg
-        #     except: pass
-        # self.messages = messages
+        notification_messages = {}
+        for [message_id, channel_id] in data['notifications']:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+                message = await channel.fetch_message(message_id)
+                notification_messages[message_id] = message
+            except: pass
+        self.notification_messages = notification_messages
 
-    async def prugeNotifications(self):
-        pass
+    async def purgeNotifications(self):
+        for message in self.notification_messages.values():
+            try: await message.delete()
+            except: pass
+        self.notification_messages = {}
 
     async def resetLobby(self):
         # Clear reactions.
@@ -210,9 +223,14 @@ class PermanentLobby(Lobby):
             try: await message.edit(content=lobby_string)
             except: print("Failed to remove message")
 
-    async def finalizeLobby(self, reason='Lobby filled.'):
-        self.notification_messages = await self.notifyMembers()
-        await self.resetLobby()
+    async def finalizeLobby(self, notify=True, reason='Lobby filled.'):
+        if notify:
+            await self.purgeNotifications()
+            self.notification_messages = await self.notifyMembers()
+        if reason == 'Lobby filled.':
+            await self.resetLobby()
+        else:
+            await Lobby.finalizeLobby(False, reason)
 
     def getLobbyString(self):
         mention_str = '\n'.join([member.mention for member in self.members.values()])
