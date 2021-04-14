@@ -2,6 +2,7 @@ import os
 import random
 import secrets
 import asyncio
+import json
 
 from datetime import datetime
 import time
@@ -20,19 +21,73 @@ bot = commands.Bot(command_prefix='!')
 
 lobbies = {}
 lobby_messages = {}
+loaded_lobby_file = False
+
+lobby_lock = asyncio.Lock()
+
+
 
 async def time_check():
-    print(time.time())
-    print("timecheck?")
     await bot.wait_until_ready()
-    print(f"ready {bot.is_closed()}")
+    
+    offset_count = 0
     while not bot.is_closed():
-        # Check for lobby timeouts.
-        await asyncio.sleep(1)
+        keys = lobbies.keys()
+        # TODO: dont check all lobbies each iteration. Stagger them.
 
+        print("Checking for timeouts")
+        timed_out_lobbies = []
+        for lobby in lobbies.values():
+            await lobby.update_lock.acquire()
+            await lobby.updateMessages()
+            if (lobby.isTimedOut()):
+                await lobby.finalizeLobby(False, "Timed out.")
+                timed_out_lobbies.append(lobby.hash)
+            lobby.update_lock.release()
+
+        for lobby_hash in timed_out_lobbies:
+            closeLobby(lobby_hash)
         # Check if lobby messages still exist.
+        await saveLobbyDump()
+
+        await asyncio.sleep(5)
+
+
+async def saveLobbyDump():
+    if not loaded_lobby_file: return
+    await lobby_lock.acquire()
+    with open('lobbies.json', 'w') as f:
+        data = {}
+        for lobby in lobbies.values():
+            await lobby.update_lock.acquire()
+            data[lobby.hash] = lobby.getSaveData()
+            lobby.update_lock.release()
+        json.dump(data, f, indent=2)
+    lobby_lock.release()
+
+async def loadLobbyDump():
+    global loaded_lobby_file
+    print("Loading saved lobbies")
+    await bot.wait_until_ready()
+    await lobby_lock.acquire()
+    lobby_types = {'Lobby': Lobby, 'PermanentLobby': PermanentLobby}
+    with open('lobbies.json', 'r') as f:
+        data = json.load(f)
+        for lobby_data in data.values():
+            print(lobby_data)
+            lobby = lobby_types[lobby_data['type']](0, '', 0, -1, bot)
+            await lobby.loadData(lobby_data)
+
+            lobbies[lobby_data['hash']] = lobby
+            for message_id in lobby.messages:
+                lobby_messages[message_id] = lobby
+    loaded_lobby_file = True
+    lobby_lock.release()
+
+
 
 bot.loop.create_task(time_check())
+bot.loop.create_task(loadLobbyDump())
 
 def closeLobby(lobby_hash):
     if lobby_hash not in lobbies: raise Exception("Trying to close non existant lobby")
@@ -51,40 +106,56 @@ def closeLobby(lobby_hash):
     elif type(lobby) is PermanentLobby:
         print(f'Purged lobby {lobby_hash}')
 
-
-def purgeLobby(lobby_hash):
-    print(f'Purging lobby {lobby_hash}')
-
 @bot.event
 async def on_ready():
     print(f'Ready to go...')
 
-@bot.command(name='lobby', help='Create a new lobby in the current channel\nUsage: "!lobby {size} {timeout:minutes default 30} {name}"\nCreates a lobby. Join lobbies by reacting to the lobby message. Once {size} members has been reached all members will be pinged in the channels where they reacted from.')
+@bot.command(name='lobby', help='Create a new lobby in the current channel\nUsage: "!lobby {size} {timeout} {name}"\n  *size:integer - Size of lobby. Once reached all members are notifierd.\n  *timeout:integer - Timeout time for lobby. After {timeout} minutes the lobby is closed. If set to -1 lobby never times out.\n  *name:string - Name of the lobby.\n\nCreates a lobby. Join lobbies by reacting to the lobby message. Once {size} members has been reached all members will be pinged in the channels where they reacted from.')
 async def init_lobby(ctx, size: int, *args):
     if (size < 1 or size >= 1000): 
-        await ctx.send("Error: Invalid lobby size. Range [1, 1000]")
+        await ctx.send("Error: Invalid lobby size. Range [1, 1000].")
         return
-    name = ' '.join(args)
-    lobby = Lobby(size, name, ctx.author.id)
+    if len(args) > 0:
+        try: timeout = int(args[0]) * 60
+        except ValueError: 
+            await ctx.send("Error: Invalid timeout datatype.")
+            return
+    else: 
+        timeout = 30 * 60
+    name = ' '.join(args[1:])
+
+    # Initialize new lobby
+    lobby = Lobby(size, name, ctx.author.id, timeout, bot)
     if (lobby.hash in lobbies): raise Exception()
     await lobby.update_lock.acquire()
     message = await lobby.postMessage(ctx)
-    lobbies[lobby.hash] = lobby
-    lobby_messages[message.id] = lobby
+    if not message == None: 
+        lobbies[lobby.hash] = lobby
+        lobby_messages[message.id] = lobby
     lobby.update_lock.release()
 
 @bot.command(name='permlobby', help='Create a new lobby in the current channel\nUsage: "!permlobby {size} {name}"\nCreates a permanent lobby. Permanent works like normal ones with the exception that they are not removed once they fill up. Instead they are only cleared.')
 async def init_perm_lobby(ctx, size: int, *args):
     if (size < 1 or size >= 1000): 
-        await ctx.send("Error: Invalid lobby size. Range [1, 1000]")
+        await ctx.send("Error: Invalid lobby size. Range [1, 1000].")
         return
-    name = ' '.join(args)
-    lobby = PermanentLobby(size, name, ctx.author.id)
+    if len(args) > 0:
+        try: timeout = int(args[0]) * 60
+        except ValueError: 
+            await ctx.send("Error: Invalid timeout datatype.")
+            return
+    else: 
+        timeout = 30 * 60
+    name = ' '.join(args[1:])
+
+    # Initialize new lobby
+    lobby = PermanentLobby(size, name, ctx.author.id, timeout, bot)
     if (lobby.hash in lobbies): raise Exception()
     await lobby.update_lock.acquire()
     message = await lobby.postMessage(ctx)
-    lobbies[lobby.hash] = lobby
-    lobby_messages[message.id] = lobby
+    if not message == None:
+        lobbies[lobby.hash] = lobby
+        lobby_messages[message.id] = lobby
     lobby.update_lock.release()
 
 @bot.command(name='clonelobby', help='Clone an existing lobby to the current channel\nUsage: "!clonelobby {id:string}"\nClones the lobby with specified id to current channel. Cloned lobbies will mirror the original lobby. Changes done to either applies to both.')
@@ -94,7 +165,8 @@ async def clone_lobby(ctx, identifier: str):
         return
     await lobbies[identifier].update_lock.acquire()
     message = await lobbies[identifier].postMessage(ctx)
-    lobby_messages[message.id] = lobbies[identifier]
+    if not message == None: 
+        lobby_messages[message.id] = lobbies[identifier]
     lobbies[identifier].update_lock.release()
 
 @bot.event
