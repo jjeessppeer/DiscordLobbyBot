@@ -13,7 +13,7 @@ load_dotenv()
 BOT_ID = int(os.getenv('BOT_ID'))
 
 class Lobby():
-    def __init__(self, size, name, author_id, timeout, bot):
+    def __init__(self, size, name, author_id, lobby_timeout, user_timeout, bot):
         self.author_id = author_id
         self.size = size
         self.name = f' - {name}' if name != "" else ""
@@ -24,10 +24,13 @@ class Lobby():
         self.hash = secrets.token_hex(4)
         self.messages = {}
         self.members = {}
+        self.members_last_active = {}
         self.finalized = False
 
+
         self.creation_time = time.time()
-        self.timeout = timeout
+        self.timeout = lobby_timeout
+        self.user_timeout = user_timeout
         self.last_activity = self.creation_time
 
 
@@ -41,6 +44,8 @@ class Lobby():
             'messages': [[message.id, message.channel.id] for message in self.messages.values()],
             'creation_time': self.creation_time,
             'timeout': self.timeout,
+            'user_timeout': self.user_timeout,
+            'members_last_active': self.members_last_active,
             'last_activity': self.last_activity
             }
         return data
@@ -52,7 +57,9 @@ class Lobby():
         self.name = data['name']
         self.creation_time = data['creation_time']
         self.timeout = data['timeout']
+        self.user_timeout = data['user_timeout']
         self.last_activity = data['last_activity']
+        self.members_last_active = data['members_last_active']
         messages = {}
         for [message_id, channel_id] in data['messages']:
             try:
@@ -77,12 +84,14 @@ class Lobby():
     def getLobbyString(self):
         mention_str = '\n'.join([member.mention for member in self.members.values()])
         if mention_str == '': mention_str = '...'
-        time_str = '' if self.timeout < 0 else f' Time remaining: {self.timeRemaining()} min'
+        lobby_timeout_str = f'Lobby timer: `{self.timeRemaining()} min`.\n' if self.timeout>0 else ''
+        reac_timeout_str = f'Reaction timeout: `{math.floor(self.user_timeout/60)} min`.\n' if self.user_timeout>0 else ''
         msg = (
-            f'__**Lobby{self.name}**__{time_str}\n'
-            f'Copy with: `!clonelobby {self.hash}`\n'
-            f'React to message to join lobby. Once {self.size} members are reached all members will be pinged.\n'
-            'This lobby can be mirrored in multiple channels using !clonelobby.\n'
+            f'__**Lobby{self.name}**__\n'
+            f'Mirror this lobby with: `!clonelobby {self.hash}`\n'
+            f'React to message to join lobby. Once `{self.size}` members are reached all members will be pinged.\n'
+            f'{lobby_timeout_str}'
+            f'{reac_timeout_str}'
             f'**Members {len(self.members)}/{self.size}:**\n'
             f'{mention_str}\n'
         )
@@ -114,10 +123,26 @@ class Lobby():
                     async for user in reaction.users():
                         if user.id == BOT_ID: continue
                         members_updated[user.id] = user
+                        if user.id not in self.members:
+                            self.members_last_active[user.id] = time.time()
                 except: pass
         if members_updated != self.members:
             self.members = members_updated
             self.last_activity = time.time()
+
+    async def updateMemberTimeouts(self):
+        if self.user_timeout < 0: return
+        fetched_messages = False
+        for user_id in self.members:
+            if time.time() - self.members_last_active[user_id] > self.user_timeout:
+                if not fetched_messages: await self.fetchMessages()
+
+                # Clear reactions.
+                for message in self.messages.values():
+                    for reaction in message.reactions:
+                        try:
+                            await message.remove_reaction(reaction, self.members[user_id])
+                        except: pass
     
     async def updateMessages(self):
         if self.finalized: return
@@ -173,9 +198,8 @@ class Lobby():
         return message
 
 class PermanentLobby(Lobby):
-    def __init__(self, size, name, author_id, timeout, bot):
-        super(PermanentLobby,self).__init__(size, name, author_id, timeout, bot)
-        print("Initializing permlobby")
+    def __init__(self, size, name, author_id, lobby_timeout, user_timeout, bot):
+        super(PermanentLobby,self).__init__(size, name, author_id, lobby_timeout, user_timeout, bot)
         self.notification_messages = {}
         self.type = 'PermanentLobby'
         self.notification_post_time = -1
@@ -211,8 +235,8 @@ class PermanentLobby(Lobby):
                     async for user in reaction.users():
                         if user.id == BOT_ID: continue
                         try: await message.remove_reaction(reaction, user)
-                        except: print("Failed to remove reactions.")
-                except: print("Failed to get reactions.")
+                        except: pass
+                except: pass
 
         # Clear members.
         self.members = {}
@@ -221,7 +245,7 @@ class PermanentLobby(Lobby):
         lobby_string = self.getLobbyString()
         for message in self.messages.values():
             try: await message.edit(content=lobby_string)
-            except: print("Failed to remove message")
+            except: pass
 
     async def finalizeLobby(self, notify=True, reason='Lobby filled.'):
         if notify:
@@ -230,17 +254,19 @@ class PermanentLobby(Lobby):
         if reason == 'Lobby filled.':
             await self.resetLobby()
         else:
-            await Lobby.finalizeLobby(False, reason)
+            await Lobby.finalizeLobby(self, False, reason)
 
     def getLobbyString(self):
         mention_str = '\n'.join([member.mention for member in self.members.values()])
         if mention_str == '': mention_str = '...'
+        lobby_timeout_str = f'Lobby timer: `{self.timeRemaining()} min`.\n' if self.timeout>0 else ''
+        reac_timeout_str = f'Reaction timeout: `{math.floor(self.user_timeout/60)} min`.\n' if self.user_timeout>0 else ''
         msg = (
             f'__**Permanent lobby{self.name}**__\n'
-            f'Copy with: `!clonelobby {self.hash}`\n'
-            f'React to message to join lobby. Once {self.size} members are reached all members will be pinged.\n'
-            'This lobby can be mirrored in multiple channels using !clonelobby.\n'
-            'Reactions are removed after 30 minutes.\n'
+            f'Mirror this lobby with: `!clonelobby {self.hash}`\n'
+            f'React to message to join lobby. Once `{self.size}` members are reached all members will be pinged.\n'
+            f'{lobby_timeout_str}'
+            f'{reac_timeout_str}'
             f'**Members {len(self.members)}/{self.size}:**\n'
             f'{mention_str}\n'
         )
