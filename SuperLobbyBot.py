@@ -29,12 +29,11 @@ async def chron_checkup():
     await bot.wait_until_ready()
     
     batch_size = 5 # Lobbies checked each iteration
-    update_interval = 5 # Interval in which all lobbies should be checked
+    update_interval = 60*5 # Interval in which all lobbies should be checked
     
     offset_count = 0
     while not bot.is_closed():
         await lobby_lock.acquire()
-        print("Chron checkup")
 
         offset_count += batch_size
         if offset_count >= len(lobbies):
@@ -59,7 +58,6 @@ async def chron_checkup():
             
             # Inactivity timeout
             elif current_time - lobby.last_activity > LOBBY_TIMEOUT:
-                print('Removing inactive lobby')
                 lobbies_to_remove.append([lobby_id, 'Inactivity timeout.'])
 
             # Messages removed
@@ -110,7 +108,6 @@ async def saveLobbyDump():
 async def loadLobbyDump():
     await lobby_lock.acquire()
     print("Loading lobbies from file...")
-    global loaded_lobby_file
     await bot.wait_until_ready()
     lobby_types = {'Lobby': Lobby, 'PermanentLobby': PermanentLobby}
     with open('lobbies.json', 'r') as f:
@@ -244,7 +241,6 @@ async def clone_lobby(ctx, identifier: str):
 @bot.event
 async def on_raw_reaction_add(payload):
     if (payload.message_id not in lobby_messages):
-        print("uninteresting message.")
         return
     lobby = lobby_messages[payload.message_id]
     await lobby.update_lock.acquire()
