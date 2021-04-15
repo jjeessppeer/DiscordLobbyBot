@@ -176,6 +176,7 @@ async def init_lobby(ctx, size: int, *args):
     if (lobby.hash in lobbies): raise Exception()
     await lobby.update_lock.acquire()
     message = await lobby.postMessage(ctx)
+    await lobby.updateMessages()
     if not message == None: 
         lobbies[lobby.hash] = lobby
         lobby_messages[message.id] = lobby
@@ -220,6 +221,7 @@ async def init_perm_lobby(ctx, size: int, *args):
     if (lobby.hash in lobbies): raise Exception()
     await lobby.update_lock.acquire()
     message = await lobby.postMessage(ctx)
+    await lobby.updateMessages()
     if not message == None:
         lobbies[lobby.hash] = lobby
         lobby_messages[message.id] = lobby
