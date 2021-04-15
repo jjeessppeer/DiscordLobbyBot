@@ -152,7 +152,7 @@ async def init_lobby(ctx, size: int, *args):
     if len(args) > 0:
         try: 
             timeout = int(args[0]) * 60
-            if (timeout > 60*24): raise ValueError()
+            if (timeout > 60*60*24): raise ValueError()
         except ValueError: 
             try: await ctx.send("Error: Invalid timeout value.")
             except: pass
@@ -162,7 +162,7 @@ async def init_lobby(ctx, size: int, *args):
     if len(args) > 1:
         try: 
             user_timeout = int(args[1]) * 60
-            if (user_timeout > 60*24): raise ValueError()
+            if (user_timeout > 60*60*24): raise ValueError()
         except ValueError:
             try: await ctx.send("Error: Invalid reaction_timeout format.")
             except: pass
@@ -197,7 +197,7 @@ async def init_perm_lobby(ctx, size: int, *args):
     if len(args) > 0:
         try: 
             timeout = int(args[0]) * 60
-            if (timeout > 60*24): raise ValueError()
+            if (timeout > 60*60*24): raise ValueError()
         except ValueError: 
             await ctx.send("Error: Invalid timeout datatype.")
             return
@@ -206,7 +206,7 @@ async def init_perm_lobby(ctx, size: int, *args):
     if len(args) > 1:
         try: 
             user_timeout = int(args[1]) * 60
-            if (user_timeout > 60*24): raise ValueError()
+            if (user_timeout > 60*60*24): raise ValueError()
         except ValueError:
             try: await ctx.send("Error: Invalid reaction_timeout format.")
             except: pass
