@@ -25,8 +25,10 @@ class Lobby():
         self.messages = {}
         self.members = {}
         self.members_last_active = {}
+        self.members_timeout = {}
         self.finalized = False
 
+        self.allow_cloning = True
 
         self.creation_time = time.time()
         self.timeout = lobby_timeout
