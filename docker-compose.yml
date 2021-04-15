@@ -1,0 +1,8 @@
+version: "3"
+services:
+  lobby-bot:
+    image: super-lobby-bot
+    container_name: super-lobby-bot
+    volumes:
+        ./lobby.py:/lobby.py
+    restart: unless-stopped
