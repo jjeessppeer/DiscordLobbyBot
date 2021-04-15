@@ -83,9 +83,10 @@ class Lobby():
         t = max(0, t)
         return t
 
-    def getLobbyString(self):
+    def getLobbyString(self, add_mentions=True):
         mention_str = '\n'.join([member.mention for member in self.members.values()])
         if mention_str == '': mention_str = '...'
+        if not add_mentions: mention_str = '...'
         lobby_timeout_str = f'Lobby timer: `{self.timeRemaining()} min`.\n' if self.timeout>0 else ''
         reac_timeout_str = f'Reaction timeout: `{math.floor(self.user_timeout/60)} min`.\n' if self.user_timeout>0 else ''
         msg = (
@@ -192,7 +193,7 @@ class Lobby():
 
     async def postMessage(self, ctx):
         try:
-            message = await ctx.send(self.getLobbyString())
+            message = await ctx.send(self.getLobbyString(False))
             await message.add_reaction('✅')
             self.messages[message.id] = message
         except:
@@ -258,9 +259,10 @@ class PermanentLobby(Lobby):
         else:
             await Lobby.finalizeLobby(self, False, reason)
 
-    def getLobbyString(self):
+    def getLobbyString(self, add_mentions=True):
         mention_str = '\n'.join([member.mention for member in self.members.values()])
         if mention_str == '': mention_str = '...'
+        if not add_mentions: mention_str = '...'
         lobby_timeout_str = f'Lobby timer: `{self.timeRemaining()} min`.\n' if self.timeout>0 else ''
         reac_timeout_str = f'Reaction timeout: `{math.floor(self.user_timeout/60)} min`.\n' if self.user_timeout>0 else ''
         msg = (

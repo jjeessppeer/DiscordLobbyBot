@@ -309,9 +309,6 @@ async def lobby_error(ctx, error):
     except: raise
     finally: await ctx.message.add_reaction('❌')
     
-    
-
-
 
 
 
